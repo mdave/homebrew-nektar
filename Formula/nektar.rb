@@ -1,27 +1,22 @@
 class Nektar < Formula
   desc "High-performance spectral/hp element framework"
   homepage "https://www.nektar.info/"
-  url "https://gitlab.nektar.info/nektar/nektar/-/archive/v5.5.0/nektar-v5.5.0.tar.bz2"
-  sha256 "220caa0384b262e60e16ed232ab0d2248f10fa840efbebd4b2ba0cb0a6fc50cd"
-
-  bottle do
-    root_url "https://github.com/mdave/homebrew-nektar/releases/download/nektar-5.5.0"
-    sha256 cellar: :any, arm64_sonoma: "52f2daf4dda246f5ebc8b7abc0f126d5cb9be7af3035b242ea08a4fe6ed51cbf"
-  end
+  url "https://gitlab.nektar.info/nektar/nektar/-/archive/v5.9.0/nektar-v5.9.0.tar.bz2"
+  sha256 "8fbb3d96546c72ea5efefe651d9dd921196d075da6c01d5c1c7ddbf964ebd2fe"
 
   depends_on "arpack"
   depends_on "boost"
-  depends_on "boost-python3"
   depends_on "cmake"
   depends_on "fftw"
   depends_on "hdf5-mpi"
+  depends_on "mdave/nektar/nektar-tinyxml"
   depends_on "numpy"
   depends_on "open-mpi"
   depends_on "opencascade"
+  depends_on "pybind11"
   depends_on "python-setuptools"
-  depends_on "python@3.12"
+  depends_on "python@3.14"
   depends_on "scotch"
-  depends_on "tinyxml"
   depends_on "zlib"
 
   # Patch for HDF 1.12
@@ -30,6 +25,9 @@ class Nektar < Formula
   def install
     args = std_cmake_args + ["-DNEKTAR_BUILD_TESTS=OFF",
                              "-DNEKTAR_BUILD_UNIT_TESTS=OFF",
+                             "-DBoost_NO_WARN_NEW_VERSIONS=1",
+                             "-DBoost_USE_MULTITHREADED=OFF",
+                             "-DBOOST_ROOT=#{Formula["boost"].opt_prefix}",
                              "-DZLIB_ROOT=#{Formula["zlib"].opt_prefix}"]
 
     args << "-DNEKTAR_BUILD_DEMOS=OFF"
@@ -45,20 +43,25 @@ class Nektar < Formula
     args << "-DNEKTAR_USE_SCOTCH=ON"
     args << "-DNEKTAR_USE_ARPACK=ON"
     args << "-DNEKTAR_USE_HDF5=ON"
-    args << "-DPYTHON_EXECUTABLE=#{Formula["python@3.12"].opt_bin}/python3.12"
+    args << "-DPYTHON_EXECUTABLE=#{Formula["python@3.14"].opt_bin}/python3.14"
 
     mkdir "build" do
-      rm "../cmake/FindHDF5.cmake"
       system "cmake", "..", *args
       system "make", "install"
 
       # Also need to install NekPy bindings
-      python = Formula["python@3.12"]
-      system python.bin/"python3.12", *Language::Python.setup_install_args(prefix)
+      python = Formula["python@3.14"].opt_bin/"python3.14"
+      cd "python" do
+        system python, "-m", "pip", "install", *std_pip_args(prefix: libexec), "."
+      end
 
       site_packages = Language::Python.site_packages(python)
       pth_contents = "import site; site.addsitedir('#{libexec/site_packages}')\n"
       (prefix/site_packages/"homebrew-nektar.pth").write pth_contents
+
+      Dir[libexec/site_packages/"NekPy/**/*.so"].each do |so|
+        MachO::Tools.add_rpath(so, lib.to_s)
+      end
     end
   end
 
@@ -67,6 +70,7 @@ class Nektar < Formula
       #include <iostream>
       #include <MultiRegions/ContField.h>
       #include <SpatialDomains/MeshGraph.h>
+      #include <SpatialDomains/MeshGraphIO.h>
 
       using namespace Nektar;
       using namespace std;
@@ -76,7 +80,7 @@ class Nektar < Formula
           LibUtilities::SessionReaderSharedPtr vSession
               = LibUtilities::SessionReader::CreateInstance(argc, argv);
           SpatialDomains::MeshGraphSharedPtr graph =
-              SpatialDomains::MeshGraph::Read(vSession);
+              SpatialDomains::MeshGraphIO::Read(vSession);
           MultiRegions::ContFieldSharedPtr fld =
               MemoryManager<MultiRegions::ContField>::AllocateSharedPtr(
                   vSession, graph, vSession->GetVariable(0));
@@ -103,13 +107,15 @@ class Nektar < Formula
     EOS
 
     (testpath/"CMakeLists.txt").write <<~EOS
-      set(CMAKE_CXX_STANDARD 14)
+      cmake_minimum_required(VERSION 4.0)
+      set(CMAKE_CXX_STANDARD 17)
       find_package(Nektar++ REQUIRED NO_MODULE NO_DEFAULT_PATH NO_CMAKE_BUILDS_PATH NO_CMAKE_PACKAGE_REGISTRY)
+      find_package(HDF5)
       include_directories(${NEKTAR++_INCLUDE_DIRS} ${NEKTAR++_TP_INCLUDE_DIRS})
       add_definitions(${NEKTAR++_DEFINITIONS})
       link_directories(${NEKTAR++_LIBRARY_DIRS} ${NEKTAR++_TP_LIBRARY_DIRS})
       add_executable(helm helm.cpp)
-      target_link_libraries(helm ${NEKTAR++_LIBRARIES} ${NEKTAR++_TP_LIBRARIES})
+      target_link_libraries(helm ${NEKTAR++_LIBRARIES})
     EOS
 
     (testpath/"project.py").write <<~EOS
@@ -161,45 +167,127 @@ class Nektar < Formula
       </NEKTAR>
     EOS
     system "cmake", "-DNektar++_DIR=#{lib}/nektar++/cmake/", "."
-    system "make"
+    system "make", "VERBOSE=1"
     assert (`./helm input.xml`.to_f < 1.0e-8)
-    python = Formula["python@3.12"]
-    system python.bin/"python3.12", "project.py"
+    python = Formula["python@3.14"]
+    system python.bin/"python3.14", "project.py"
   end
 end
 
 __END__
-diff --git a/cmake/NektarCommon.cmake b/cmake/NektarCommon.cmake
-index 01274b4fe..e14263b46 100644
---- a/cmake/NektarCommon.cmake
-+++ b/cmake/NektarCommon.cmake
-@@ -291,8 +291,14 @@ MACRO(ADD_NEKPY_LIBRARY name)
-     TARGET_LINK_LIBRARIES(_${name}
-         ${Boost_SYSTEM_LIBRARY}
-         ${BOOST_PYTHON_LIB}
--        ${BOOST_NUMPY_LIB}
--        ${PYTHON_LIBRARIES})
-+        ${BOOST_NUMPY_LIB})
+diff --git a/cmake/ThirdPartyPython.cmake b/cmake/ThirdPartyPython.cmake
+index f1e37ba1a..643bf225c 100644
+--- a/cmake/ThirdPartyPython.cmake
++++ b/cmake/ThirdPartyPython.cmake
+@@ -40,18 +40,27 @@ IF (NEKTAR_BUILD_PYTHON)
+         COMMAND ${Python3_EXECUTABLE} -m pip install .
+         WORKING_DIRECTORY ${NEKPY_BASE_DIR})
+ 
+-    EXTERNALPROJECT_ADD(
+-        pybind11
+-        PREFIX ${TPSRC}
+-        URL ${TPURL}/pybind11-002c05b17.zip
+-        URL_MD5 4fd2f2df6a8a4f28c260e56163bf4481
+-        STAMP_DIR ${TPBUILD}/stamp
+-        DOWNLOAD_DIR ${TPSRC}
+-        SOURCE_DIR ${TPSRC}/pybind11
+-        BINARY_DIR ${TPBUILD}/pybind11
+-        TMP_DIR ${TPBUILD}/pybind11-tmp
+-        INSTALL_DIR ${TPDIST}
+-        CONFIGURE_COMMAND ${CMAKE_COMMAND}
++    # Require pybind11 v3 or later for unique_ptr transfer
++    FIND_PACKAGE(pybind11 3 CONFIG QUIET)
 +
-+    IF(APPLE)
-+        SET_TARGET_PROPERTIES(_${name} PROPERTIES
-+            LINK_FLAGS "-undefined dynamic_lookup")
++    IF (pybind11_FOUND)
++        MESSAGE(STATUS "Found pybind11: ${pybind11_INCLUDE_DIR}")
++        ADD_CUSTOM_TARGET(pybind11 ALL)
++        INCLUDE_DIRECTORIES(${pybind11_INCLUDE_DIR})
 +    ELSE()
-+        TARGET_LINK_LIBRARIES(_${name} ${PYTHON_LIBRARIES})
++        MESSAGE(STATUS "Build pybind11: ${TPDIST}/include/pybind11")
++        EXTERNALPROJECT_ADD(
++            pybind11
++            PREFIX ${TPSRC}
++            URL ${TPURL}/pybind11-3.0.1.zip
++            URL_MD5 53f015a45ffaeeec2ad605ac436526ba
++            STAMP_DIR ${TPBUILD}/stamp
++            DOWNLOAD_DIR ${TPSRC}
++            SOURCE_DIR ${TPSRC}/pybind11
++            BINARY_DIR ${TPBUILD}/pybind11
++            TMP_DIR ${TPBUILD}/pybind11-tmp
++            INSTALL_DIR ${TPDIST}
++            CONFIGURE_COMMAND ${CMAKE_COMMAND}
+             -G ${CMAKE_GENERATOR}
+             -DCMAKE_C_COMPILER:FILEPATH=${CMAKE_C_COMPILER}
+             -DCMAKE_CXX_COMPILER:FILEPATH=${CMAKE_CXX_COMPILER}
+@@ -59,12 +68,13 @@ IF (NEKTAR_BUILD_PYTHON)
+             -DPYBIND11_TEST=OFF
+             ${TPSRC}/pybind11)
+ 
+-     # Add third-party include to include path.
+-     INCLUDE_DIRECTORIES(${TPDIST}/include)
++        # Add third-party include to include path.
++        INCLUDE_DIRECTORIES(${TPDIST}/include)
+ 
+-     ADD_DEPENDENCIES(thirdparty pybind11)
++        ADD_DEPENDENCIES(thirdparty pybind11)
 +    ENDIF()
  
-     IF (NEKPY_LIBDEPENDS)
-         TARGET_LINK_LIBRARIES(_${name} ${NEKPY_LIBDEPENDS})
-diff --git a/cmake/ThirdPartyZlib.cmake b/cmake/ThirdPartyZlib.cmake
-index dd8c4811b..c5cf57441 100644
---- a/cmake/ThirdPartyZlib.cmake
-+++ b/cmake/ThirdPartyZlib.cmake
-@@ -16,7 +16,7 @@ IF(WIN32)
-     SET(BUILD_ZLIB ON)
+-     FILE(WRITE ${NEKPY_BASE_DIR}/NekPy/__init__.py "# Adjust dlopen flags to avoid OpenMPI issues
++    FILE(WRITE ${NEKPY_BASE_DIR}/NekPy/__init__.py "# Adjust dlopen flags to avoid OpenMPI issues
+ try:
+     import DLFCN as dl
+     import sys
+diff --git a/cmake/ThirdPartyBoost.cmake b/cmake/ThirdPartyBoost.cmake
+index c71c368960..22c962efb7 100644
+--- a/cmake/ThirdPartyBoost.cmake
++++ b/cmake/ThirdPartyBoost.cmake
+@@ -12,29 +12,29 @@ MESSAGE(STATUS "Searching for Boost:")
+ # Minimum version and boost libraries required
+ SET(MIN_VER "1.60.0")
+ IF (NEKTAR_USE_BOOST_FILESYSTEM)
+-    SET(NEEDED_BOOST_LIBS iostreams filesystem system program_options)
++    SET(NEEDED_BOOST_LIBS iostreams filesystem program_options)
  ELSE()
-     FIND_PACKAGE(ZLIB QUIET)
--    IF (ZLIB_FOUND AND NOT ZLIB_VERSION_PATCH LESS 7)
-+    IF (ZLIB_FOUND AND ZLIB_VERSION_STRING VERSION_GREATER 1.2.8)
-         SET(BUILD_ZLIB OFF)
+-    SET(NEEDED_BOOST_LIBS iostreams system program_options)
++    SET(NEEDED_BOOST_LIBS iostreams program_options)
+ ENDIF()
+ 
+ SET(Boost_NO_BOOST_CMAKE ON)
+ IF( BOOST_ROOT )
+     SET(Boost_NO_SYSTEM_PATHS ON)
+-    FIND_PACKAGE( Boost ${MIN_VER} QUIET COMPONENTS ${NEEDED_BOOST_LIBS})
++    FIND_PACKAGE( Boost ${MIN_VER} COMPONENTS ${NEEDED_BOOST_LIBS} OPTIONAL_COMPONENTS system)
+ ELSE ()
+     SET(TEST_ENV1 $ENV{BOOST_HOME})
+     SET(TEST_ENV2 $ENV{BOOST_DIR})
+     IF (DEFINED TEST_ENV1)
+         SET(BOOST_ROOT $ENV{BOOST_HOME})
+         SET(Boost_NO_SYSTEM_PATHS ON)
+-        FIND_PACKAGE( Boost ${MIN_VER} QUIET COMPONENTS ${NEEDED_BOOST_LIBS} )
++        FIND_PACKAGE( Boost ${MIN_VER} QUIET COMPONENTS ${NEEDED_BOOST_LIBS} OPTIONAL_COMPONENTS system)
+     ELSEIF (DEFINED TEST_ENV2)
+         SET(BOOST_ROOT $ENV{BOOST_DIR})
+         SET(Boost_NO_SYSTEM_PATHS ON)
+-        FIND_PACKAGE( Boost ${MIN_VER} QUIET COMPONENTS ${NEEDED_BOOST_LIBS} )
++        FIND_PACKAGE( Boost ${MIN_VER} QUIET COMPONENTS ${NEEDED_BOOST_LIBS} OPTIONAL_COMPONENTS system)
      ELSE ()
-         SET(BUILD_ZLIB ON)
+         SET(BOOST_ROOT ${TPDIST})
+-        FIND_PACKAGE( Boost ${MIN_VER} QUIET COMPONENTS ${NEEDED_BOOST_LIBS} )
++        FIND_PACKAGE( Boost ${MIN_VER} QUIET COMPONENTS ${NEEDED_BOOST_LIBS} OPTIONAL_COMPONENTS system)
+     ENDIF()
+ ENDIF()
+ 
+
+diff --git a/cmake/ThirdPartyMPI.cmake b/cmake/ThirdPartyMPI.cmake
+index 2f538c297e..8c04b741fb 100644
+--- a/cmake/ThirdPartyMPI.cmake
++++ b/cmake/ThirdPartyMPI.cmake
+@@ -77,6 +77,7 @@ IF( NEKTAR_USE_MPI )
+                 -DCMAKE_CXX_COMPILER:FILEPATH=${CMAKE_CXX_COMPILER}
+                 -DCMAKE_BUILD_TYPE:STRING=Debug
+                 -DCMAKE_INSTALL_PREFIX:PATH=${TPDIST}
++                -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+                 ${TPSRC}/gsmpi-1.2.1_2
+         )
+         THIRDPARTY_LIBRARY(GSMPI_LIBRARY STATIC gsmpi DESCRIPTION "GSMPI Library")
+
