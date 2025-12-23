@@ -4,6 +4,13 @@ class Nektar < Formula
   url "https://gitlab.nektar.info/nektar/nektar/-/archive/v5.9.0/nektar-v5.9.0.tar.bz2"
   sha256 "8fbb3d96546c72ea5efefe651d9dd921196d075da6c01d5c1c7ddbf964ebd2fe"
 
+  bottle do
+    root_url "https://github.com/mdave/homebrew-nektar/releases/download/nektar-5.9.0"
+    sha256 cellar: :any, arm64_tahoe:   "951d8c6d46a616a3d2b1ed5819e1f30930de522996f1e258da0d44c2eab1fda0"
+    sha256 cellar: :any, arm64_sequoia: "fc9d63dbc24acd1736f58ea27491d63e2222450dbc531f208dcd1ef980463370"
+    sha256 cellar: :any, arm64_sonoma:  "384ac6931a2224b58a01e59a375ada411e60c6923af16c4116a0ef4cd5c153bf"
+  end
+
   depends_on "arpack"
   depends_on "boost"
   depends_on "cmake"
