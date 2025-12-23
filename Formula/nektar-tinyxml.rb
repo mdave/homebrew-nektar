@@ -5,6 +5,13 @@ class NektarTinyxml < Formula
   sha256 "15bdfdcec58a7da30adc87ac2b078e4417dbe5392f3afb719f9ba6d062645593"
   license "Zlib"
 
+  bottle do
+    root_url "https://github.com/mdave/homebrew-nektar/releases/download/nektar-tinyxml-2.6.2"
+    sha256 cellar: :any, arm64_tahoe:   "f885f1c7e4ce393106f66dc2eaf26595dd97f5c9073dd43c7af6a58f991be112"
+    sha256 cellar: :any, arm64_sequoia: "3a95d120bef96da510f167f8805a38bc9a485474d8b526d2844c6161e5128b4b"
+    sha256 cellar: :any, arm64_sonoma:  "a130c1dcabecef042b61d57b7a0dbe3513c2c0e7a17554fcc3faa6219cb4d388"
+  end
+
   depends_on "cmake" => :build
 
   # The first two patches are taken from the debian packaging of tinyxml.
